@@ -1,36 +1,59 @@
+from flask import Flask, session
+from flask_restful import Api, Resource, reqparse
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import MetaData
-from sqlalchemy_serializer import SerializerMixin
 
-metadata = MetaData(naming_convention={
-    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
-})
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///blog.db'
+app.config['SECRET_KEY'] = 'secret-key'
+api = Api(app)
+db = SQLAlchemy(app)
 
-db = SQLAlchemy(metadata=metadata)
-
-class Article(db.Model, SerializerMixin):
-    __tablename__ = 'articles'
-
+class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    author = db.Column(db.String)
-    title = db.Column(db.String)
-    content = db.Column(db.String)
-    preview = db.Column(db.String)
-    minutes_to_read = db.Column(db.Integer)
-    date = db.Column(db.DateTime, server_default=db.func.now())
+    username = db.Column(db.String(80), unique=True, nullable=False)
 
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    def serialize(self):
+        return {
+            'id': self.id,
+            'username': self.username
+        }
 
-    def __repr__(self):
-        return f'Article {self.id} by {self.author}'
+@app.before_first_request
+def create_tables():
+    db.create_all()
 
-class User(db.Model, SerializerMixin):
-    __tablename__ = 'users'
+class Login(Resource):
+    def post(self):
+        parser = reqparse.RequestParser()
+        parser.add_argument('username', required=True, location='json')
+        args = parser.parse_args()
 
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String, unique=True)
+        user = User.query.filter_by(username=args['username']).first()
+        if user:
+            session['user_id'] = user.id
+            return user.serialize(), 200
+        else:
+            return {'message': 'User not found'}, 404
 
-    articles = db.relationship('Article', backref='user')
+class Logout(Resource):
+    def delete(self):
+        if 'user_id' in session:
+            session.pop('user_id', None)
+            return '', 204
+        else:
+            return '', 401
 
-    def __repr__(self):
-        return f'User {self.username}, ID {self.id}'
+class CheckSession(Resource):
+    def get(self):
+        if 'user_id' in session:
+            user = User.query.get(session['user_id'])
+            return user.serialize(), 200
+        else:
+            return '', 401
+
+api.add_resource(Login, '/login')
+api.add_resource(Logout, '/logout')
+api.add_resource(CheckSession, '/check_session')
+
+if __name__ == '__main__':
+    app.run(debug=True)
